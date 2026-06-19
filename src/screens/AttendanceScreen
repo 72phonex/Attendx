@@ -1,0 +1,338 @@
+import React, { useState, useCallback } from 'react';
+import {
+  View, Text, ScrollView, TouchableOpacity, Modal,
+  StyleSheet, ActivityIndicator, Alert, TextInput, FlatList,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
+import { C } from '../constants/colors';
+import { SUBJECT_COLORS, getTodayString } from '../constants';
+import {
+  getAttendanceSummary, getSubjects,
+  addSubject, updateSubject, deleteSubject,
+  markAttendance, getAttendanceForSubject, deleteAttendanceEntry,
+  calcAttendance,
+} from '../db/database';
+
+export default function AttendanceScreen() {
+  const [subjects, setSubjects] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [subModal, setSubModal] = useState(false);
+  const [markModal, setMarkModal] = useState(null); // subject object
+  const [historyModal, setHistoryModal] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [editSub, setEditSub] = useState(null);
+
+  // Subject form state
+  const [form, setForm] = useState({ name: '', code: '', teacher: '', color: SUBJECT_COLORS[0], threshold: '75' });
+
+  const load = async () => {
+    setLoading(true);
+    const data = await getAttendanceSummary();
+    setSubjects(data);
+    setLoading(false);
+  };
+
+  useFocusEffect(useCallback(() => { load(); }, []));
+
+  const openAdd = () => {
+    setEditSub(null);
+    setForm({ name: '', code: '', teacher: '', color: SUBJECT_COLORS[0], threshold: '75' });
+    setSubModal(true);
+  };
+
+  const openEdit = (sub) => {
+    setEditSub(sub);
+    setForm({ name: sub.name, code: sub.code || '', teacher: sub.teacher || '', color: sub.color, threshold: String(sub.threshold) });
+    setSubModal(true);
+  };
+
+  const saveSubject = async () => {
+    if (!form.name.trim()) return Alert.alert('Required', 'Subject name is required');
+    const t = parseInt(form.threshold) || 75;
+    if (editSub) {
+      await updateSubject(editSub.id, form.name.trim(), form.code.trim(), form.teacher.trim(), form.color, t);
+    } else {
+      await addSubject(form.name.trim(), form.code.trim(), form.teacher.trim(), form.color, t);
+    }
+    setSubModal(false);
+    load();
+  };
+
+  const confirmDelete = (sub) => {
+    Alert.alert('Delete Subject', `Delete "${sub.name}" and all its attendance data?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: async () => { await deleteSubject(sub.id); load(); } },
+    ]);
+  };
+
+  const openHistory = async (sub) => {
+    const h = await getAttendanceForSubject(sub.id);
+    setHistory(h);
+    setHistoryModal(sub);
+  };
+
+  const handleMark = async (sub, status) => {
+    const today = getTodayString();
+    await markAttendance(sub.id, today, status);
+    setMarkModal(null);
+    load();
+  };
+
+  const deleteHistoryEntry = async (subId, date) => {
+    await deleteAttendanceEntry(subId, date);
+    const h = await getAttendanceForSubject(subId);
+    setHistory(h);
+    load();
+  };
+
+  const getStatusStyle = (pct, threshold) => {
+    if (pct === null) return { bar: C.textDim, label: 'No data', labelColor: C.textDim };
+    if (pct >= threshold) return { bar: C.success, label: '✅ Safe', labelColor: C.success };
+    if (pct >= threshold - 5) return { bar: C.warning, label: '⚠️ Border', labelColor: C.warning };
+    return { bar: C.danger, label: '❌ Danger', labelColor: C.danger };
+  };
+
+  return (
+    <SafeAreaView style={s.root}>
+      {/* Header */}
+      <View style={s.header}>
+        <Text style={s.title}>Attendance</Text>
+        <TouchableOpacity style={s.addBtn} onPress={openAdd}>
+          <Ionicons name="add" size={22} color={C.white} />
+        </TouchableOpacity>
+      </View>
+
+      {loading
+        ? <ActivityIndicator style={{ marginTop: 40 }} color={C.accent} />
+        : subjects.length === 0
+          ? <View style={s.empty}>
+              <Ionicons name="school-outline" size={48} color={C.textDim} />
+              <Text style={s.emptyText}>No subjects yet</Text>
+              <Text style={s.emptyHint}>Tap + to add your first subject</Text>
+            </View>
+          : <ScrollView showsVerticalScrollIndicator={false}>
+              {subjects.map((sub) => {
+                const { pct, canBunk, needMore } = calcAttendance(sub.present, sub.total, sub.threshold);
+                const st = getStatusStyle(pct, sub.threshold);
+                return (
+                  <TouchableOpacity key={sub.id} style={s.card} onPress={() => setMarkModal(sub)} onLongPress={() => openHistory(sub)} activeOpacity={0.8}>
+                    <View style={s.cardTop}>
+                      <View style={[s.colorDot, { backgroundColor: sub.color }]} />
+                      <View style={s.flex}>
+                        <Text style={s.subName}>{sub.name}{sub.code ? ` (${sub.code})` : ''}</Text>
+                        {sub.teacher ? <Text style={s.subTeacher}>{sub.teacher}</Text> : null}
+                      </View>
+                      <TouchableOpacity onPress={() => openEdit(sub)} style={s.editBtn}>
+                        <Ionicons name="pencil-outline" size={16} color={C.textMid} />
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => confirmDelete(sub)} style={s.editBtn}>
+                        <Ionicons name="trash-outline" size={16} color={C.danger} />
+                      </TouchableOpacity>
+                    </View>
+
+                    {/* Progress bar */}
+                    <View style={s.barBg}>
+                      <View style={[s.barFill, { width: `${Math.min(pct || 0, 100)}%`, backgroundColor: st.bar }]} />
+                      {/* Threshold marker */}
+                      <View style={[s.marker, { left: `${sub.threshold}%` }]} />
+                    </View>
+
+                    <View style={s.cardBottom}>
+                      <Text style={s.statsText}>
+                        {sub.present}/{sub.total} classes · <Text style={{ color: st.bar, fontWeight: '700' }}>{pct !== null ? `${pct}%` : 'No data'}</Text>
+                      </Text>
+                      <Text style={[s.statusLabel, { color: st.labelColor }]}>{st.label}</Text>
+                    </View>
+
+                    {pct !== null && (
+                      <Text style={[s.bunkText, { color: canBunk > 0 ? C.success : C.danger }]}>
+                        {canBunk > 0
+                          ? `Can skip ${canBunk} more class${canBunk > 1 ? 'es' : ''}`
+                          : `Attend ${needMore} more to reach ${sub.threshold}%`}
+                      </Text>
+                    )}
+
+                    <Text style={s.tapHint}>Tap to mark · Hold for history</Text>
+                  </TouchableOpacity>
+                );
+              })}
+              <View style={{ height: 30 }} />
+            </ScrollView>
+      }
+
+      {/* Mark Attendance Modal */}
+      <Modal visible={!!markModal} transparent animationType="slide" onRequestClose={() => setMarkModal(null)}>
+        <View style={s.overlay}>
+          <View style={s.sheet}>
+            <Text style={s.sheetTitle}>Mark Attendance</Text>
+            {markModal && <Text style={s.sheetSub}>{markModal.name} · {getTodayString()}</Text>}
+            <View style={s.markRow}>
+              <MarkBtn label="Present" icon="checkmark-circle" color={C.success} onPress={() => handleMark(markModal, 'present')} />
+              <MarkBtn label="Absent"  icon="close-circle"      color={C.danger}  onPress={() => handleMark(markModal, 'absent')} />
+              <MarkBtn label="Cancel"  icon="remove-circle"     color={C.textMid} onPress={() => handleMark(markModal, 'cancelled')} />
+            </View>
+            <TouchableOpacity onPress={() => setMarkModal(null)} style={s.dismissBtn}>
+              <Text style={s.dismissText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* History Modal */}
+      <Modal visible={!!historyModal} transparent animationType="slide" onRequestClose={() => setHistoryModal(null)}>
+        <View style={s.overlay}>
+          <View style={[s.sheet, { maxHeight: '80%' }]}>
+            <Text style={s.sheetTitle}>{historyModal?.name} History</Text>
+            <FlatList
+              data={history}
+              keyExtractor={(i) => i.id.toString()}
+              ListEmptyComponent={<Text style={s.emptyText}>No records yet</Text>}
+              renderItem={({ item }) => (
+                <View style={s.histRow}>
+                  <Text style={[s.histStatus,
+                    item.status === 'present' && { color: C.success },
+                    item.status === 'absent'  && { color: C.danger },
+                    item.status === 'cancelled' && { color: C.textMid },
+                  ]}>
+                    {item.status === 'present' ? '✅' : item.status === 'absent' ? '❌' : '🚫'}
+                  </Text>
+                  <Text style={s.histDate}>{item.date}</Text>
+                  <TouchableOpacity onPress={() => deleteHistoryEntry(historyModal.id, item.date)}>
+                    <Ionicons name="trash-outline" size={15} color={C.danger} />
+                  </TouchableOpacity>
+                </View>
+              )}
+            />
+            <TouchableOpacity onPress={() => setHistoryModal(null)} style={s.dismissBtn}>
+              <Text style={s.dismissText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Add / Edit Subject Modal */}
+      <Modal visible={subModal} transparent animationType="slide" onRequestClose={() => setSubModal(false)}>
+        <View style={s.overlay}>
+          <View style={s.sheet}>
+            <Text style={s.sheetTitle}>{editSub ? 'Edit Subject' : 'Add Subject'}</Text>
+            <TextInput style={s.input} placeholder="Subject name *" placeholderTextColor={C.textDim}
+              value={form.name} onChangeText={(v) => setForm({ ...form, name: v })} />
+            <TextInput style={s.input} placeholder="Short code (e.g. PHY)" placeholderTextColor={C.textDim}
+              value={form.code} onChangeText={(v) => setForm({ ...form, code: v })} />
+            <TextInput style={s.input} placeholder="Teacher name" placeholderTextColor={C.textDim}
+              value={form.teacher} onChangeText={(v) => setForm({ ...form, teacher: v })} />
+            <TextInput style={s.input} placeholder="Attendance threshold % (default 75)" placeholderTextColor={C.textDim}
+              keyboardType="numeric" value={form.threshold} onChangeText={(v) => setForm({ ...form, threshold: v })} />
+
+            <Text style={s.colorLabel}>Color</Text>
+            <View style={s.colorRow}>
+              {SUBJECT_COLORS.map((col) => (
+                <TouchableOpacity key={col} onPress={() => setForm({ ...form, color: col })}
+                  style={[s.colorOpt, { backgroundColor: col }, form.color === col && s.colorSelected]} />
+              ))}
+            </View>
+
+            <View style={s.btnRow}>
+              <TouchableOpacity style={s.cancelBtn} onPress={() => setSubModal(false)}>
+                <Text style={s.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.saveBtn} onPress={saveSubject}>
+                <Text style={s.saveText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+function MarkBtn({ label, icon, color, onPress }) {
+  return (
+    <TouchableOpacity style={[s.markBtn, { borderColor: color }]} onPress={onPress}>
+      <Ionicons name={icon} size={28} color={color} />
+      <Text style={[s.markLabel, { color }]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: C.bg },
+  flex: { flex: 1 },
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16,
+  },
+  title: { fontSize: 26, fontWeight: '800', color: C.text },
+  addBtn: {
+    backgroundColor: C.accent, width: 40, height: 40,
+    borderRadius: 20, justifyContent: 'center', alignItems: 'center',
+  },
+  empty: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40, gap: 8 },
+  emptyText: { fontSize: 18, fontWeight: '700', color: C.textMid, marginTop: 8 },
+  emptyHint: { fontSize: 14, color: C.textDim, textAlign: 'center' },
+
+  card: {
+    backgroundColor: C.card, marginHorizontal: 16, marginBottom: 12,
+    borderRadius: 16, padding: 16, borderWidth: 1, borderColor: C.border,
+  },
+  cardTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+  colorDot: { width: 14, height: 14, borderRadius: 7, marginRight: 10 },
+  subName: { fontSize: 16, fontWeight: '700', color: C.text },
+  subTeacher: { fontSize: 12, color: C.textMid, marginTop: 1 },
+  editBtn: { padding: 6 },
+  barBg: {
+    height: 8, backgroundColor: C.border, borderRadius: 4,
+    marginBottom: 10, overflow: 'visible', position: 'relative',
+  },
+  barFill: { height: 8, borderRadius: 4 },
+  marker: { position: 'absolute', top: -3, width: 2, height: 14, backgroundColor: C.textMid, borderRadius: 1 },
+  cardBottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  statsText: { fontSize: 13, color: C.textMid },
+  statusLabel: { fontSize: 12, fontWeight: '700' },
+  bunkText: { fontSize: 12, marginTop: 6, fontWeight: '600' },
+  tapHint: { fontSize: 11, color: C.textDim, marginTop: 8, textAlign: 'right' },
+
+  overlay: { flex: 1, backgroundColor: '#000000AA', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: C.card, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    padding: 24, paddingBottom: 36,
+  },
+  sheetTitle: { fontSize: 20, fontWeight: '800', color: C.text, marginBottom: 4 },
+  sheetSub: { fontSize: 13, color: C.textMid, marginBottom: 20 },
+  markRow: { flexDirection: 'row', justifyContent: 'space-around', marginVertical: 16 },
+  markBtn: {
+    alignItems: 'center', gap: 6, paddingVertical: 14, paddingHorizontal: 20,
+    borderRadius: 16, borderWidth: 1.5,
+  },
+  markLabel: { fontSize: 12, fontWeight: '700' },
+  dismissBtn: { marginTop: 12, alignSelf: 'center' },
+  dismissText: { color: C.textMid, fontSize: 15 },
+
+  histRow: {
+    flexDirection: 'row', alignItems: 'center', paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: C.border, gap: 12,
+  },
+  histStatus: { fontSize: 18 },
+  histDate: { flex: 1, color: C.text, fontSize: 14 },
+
+  input: {
+    backgroundColor: C.cardAlt, borderRadius: 12, padding: 14, color: C.text,
+    fontSize: 15, marginBottom: 10, borderWidth: 1, borderColor: C.border,
+  },
+  colorLabel: { fontSize: 13, color: C.textMid, marginBottom: 8, fontWeight: '600' },
+  colorRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
+  colorOpt: { width: 32, height: 32, borderRadius: 16 },
+  colorSelected: { borderWidth: 3, borderColor: C.white },
+
+  btnRow: { flexDirection: 'row', gap: 12 },
+  cancelBtn: {
+    flex: 1, padding: 14, borderRadius: 14, borderWidth: 1,
+    borderColor: C.border, alignItems: 'center',
+  },
+  cancelText: { color: C.textMid, fontWeight: '600', fontSize: 15 },
+  saveBtn: { flex: 1, backgroundColor: C.accent, padding: 14, borderRadius: 14, alignItems: 'center' },
+  saveText: { color: C.white, fontWeight: '700', fontSize: 15 },
+});
