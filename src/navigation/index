@@ -1,0 +1,54 @@
+import React from 'react';
+import { NavigationContainer } from '@react-navigation/native';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { Ionicons } from '@expo/vector-icons';
+import { C } from '../constants/colors';
+
+import DashboardScreen from '../screens/DashboardScreen';
+import AttendanceScreen from '../screens/AttendanceScreen';
+import TasksScreen from '../screens/TasksScreen';
+import TimetableScreen from '../screens/TimetableScreen';
+import SettingsScreen from '../screens/SettingsScreen';
+
+const Tab = createBottomTabNavigator();
+
+const ICONS = {
+  Home:       ['home',             'home-outline'],
+  Attendance: ['checkmark-circle', 'checkmark-circle-outline'],
+  Tasks:      ['document-text',    'document-text-outline'],
+  Timetable:  ['calendar',         'calendar-outline'],
+  Settings:   ['settings',         'settings-outline'],
+};
+
+export default function AppNavigator() {
+  return (
+    <NavigationContainer>
+      <Tab.Navigator
+        screenOptions={({ route }) => ({
+          tabBarIcon: ({ focused, color, size }) => {
+            const [on, off] = ICONS[route.name] || ['help', 'help-outline'];
+            return <Ionicons name={focused ? on : off} size={size} color={color} />;
+          },
+          tabBarActiveTintColor: C.accent,
+          tabBarInactiveTintColor: C.textDim,
+          tabBarStyle: {
+            backgroundColor: C.card,
+            borderTopColor: C.border,
+            borderTopWidth: 1,
+            height: 62,
+            paddingBottom: 8,
+            paddingTop: 4,
+          },
+          tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
+          headerShown: false,
+         })}
+      >
+        <Tab.Screen name="Home"       component={DashboardScreen} />
+        <Tab.Screen name="Attendance" component={AttendanceScreen} />
+        <Tab.Screen name="Tasks"      component={TasksScreen} />
+        <Tab.Screen name="Timetable"  component={TimetableScreen} />
+        <Tab.Screen name="Settings"   component={SettingsScreen} />
+      </Tab.Navigator>
+    </NavigationContainer>
+  );
+  }
