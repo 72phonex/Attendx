@@ -1,0 +1,115 @@
+import * as SecureStore from 'expo-secure-store';
+import { AI_PROVIDERS } from '../constants';
+
+const KEYS = {
+  provider: 'ai_provider',
+  key: 'ai_key',
+  model: 'ai_model',
+  endpoint: 'ai_endpoint',
+};
+
+export const getAIConfig = async () => {
+  const provider = (await SecureStore.getItemAsync(KEYS.provider)) || 'groq';
+  const apiKey = (await SecureStore.getItemAsync(KEYS.key)) || '';
+  const model =
+    (await SecureStore.getItemAsync(KEYS.model)) ||
+    AI_PROVIDERS[provider]?.defaultModel ||
+    '';
+  const endpoint =
+    (await SecureStore.getItemAsync(KEYS.endpoint)) ||
+    AI_PROVIDERS[provider]?.endpoint ||
+    '';
+  return { provider, apiKey, model, endpoint };
+};
+
+export const saveAIConfig = async (provider, apiKey, model, endpoint) => {
+  await SecureStore.setItemAsync(KEYS.provider, provider);
+  await SecureStore.setItemAsync(KEYS.key, apiKey);
+  await SecureStore.setItemAsync(KEYS.model, model);
+  await SecureStore.setItemAsync(
+    KEYS.endpoint,
+    endpoint || AI_PROVIDERS[provider]?.endpoint || ''
+  );
+};
+
+export const callAI = async (userPrompt, systemPrompt = '') => {
+  const { apiKey, model, endpoint } = await getAIConfig();
+
+  if (!apiKey) throw new Error('No API key. Go to Settings → AI Settings.');
+  if (!endpoint) throw new Error('No endpoint set. Configure in Settings.');
+
+  const messages = [];
+  if (systemPrompt) messages.push({ role: 'system', content: systemPrompt });
+  messages.push({ role: 'user', content: userPrompt });
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ model, max_tokens: 600, messages }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`AI Error (${res.status}): ${text.slice(0, 200)}`);
+  }
+
+  const data = await res.json();
+  return data.choices[0].message.content.trim();
+};
+
+export const testConnection = async () => {
+  const reply = await callAI('Reply with exactly: "AttendX connected ✅"');
+  return reply;
+};
+
+// Parse natural language task input into structured data
+export const parseTaskNLP = async (input, subjects = []) => {
+  const today = new Date().toISOString().split('T')[0];
+  const subList = subjects.map((s) => s.name).join(', ') || 'none';
+
+  const prompt = `Today is ${today}.
+Available subjects: ${subList}
+
+Parse this task description into JSON:
+"${input}"
+
+Return ONLY raw JSON (no markdown, no backticks):
+{"title":"task title","subject_name":"exact subject name or null","due_date":"YYYY-MM-DD or null","priority":"high|medium|low"}
+
+Rules:
+- title: clean task name
+- subject_name: match from available subjects list or null
+- due_date: infer from text (today, tomorrow, Friday, etc.) or null
+- priority: default medium`;
+
+  const raw = await callAI(prompt);
+  try {
+    const clean = raw.replace(/```json|```/g, '').trim();
+    return JSON.parse(clean);
+  } catch {
+    return { title: input, subject_name: null, due_date: null, priority: 'medium' };
+  }
+};
+
+// Get AI study advice based on current state
+export const getStudyAdvice = async (dangerSubjects = [], urgentTasks = []) => {
+  const dangerList =
+    dangerSubjects.length > 0
+      ? dangerSubjects.map((s) => `${s.name} (${s.pct}%)`).join(', ')
+      : 'none';
+  const taskList =
+    urgentTasks.length > 0
+      ? urgentTasks.map((t) => `${t.title} (due ${t.due_date})`).join(', ')
+      : 'none';
+
+  const prompt = `BTech student status:
+- Subjects below 75% attendance: ${dangerList}
+- Tasks due in next 3 days: ${taskList}
+
+Give ONE sharp, direct study tip in 1-2 sentences. Be like a no-nonsense senior, not a motivational poster. No fluff.`;
+
+  return callAI(prompt);
+};
